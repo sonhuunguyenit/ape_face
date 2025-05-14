@@ -7,9 +7,9 @@ const PORT = 8081;
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.text({ type: "*/*" }));
 
-app.post("/iclock/cdata", (req, res) => {
+app.get("/iclock/cdata", (req, res) => {
   console.log("Dữ liệu nhận được từ thiết bị:");
-  console.log(req.body);
+  console.log(req);
 
   res.status(200).send("OK");
 });
