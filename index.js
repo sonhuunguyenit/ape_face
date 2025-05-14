@@ -2,7 +2,7 @@ const express = require("express");
 const bodyParser = require("body-parser");
 
 const app = express();
-const PORT = 8080;
+const PORT = 8081;
 
 // Middleware để parse dữ liệu từ thiết bị
 app.use(bodyParser.urlencoded({ extended: false }));
