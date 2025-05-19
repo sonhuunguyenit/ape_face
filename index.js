@@ -3,7 +3,6 @@ import axios from "axios";
 
 const app = express();
 
-// Transform định dạng
 app.use(
   express.text({
     type: (req) => {
@@ -13,7 +12,6 @@ app.use(
   })
 );
 
-// Middleware log thông tin request
 app.use((req, res, next) => {
   const { method, url, query, body, headers, ip } = req;
   console.log("\n=====================");
@@ -61,8 +59,6 @@ app.get("/iclock/cdata", (req, res) => {
         `SessionID=${device.sessionID}`,
         `PushProtVer=${pushver}`,
         "TransTables=User Transaction, Attendance",
-        // `ServerVersion=3.0.1`,
-        // "ServerName=MyPushServer",
         "ErrorDelay=30",
         "RequestDelay=1",
         "TransTimes=00:00",
@@ -100,7 +96,7 @@ app.post("/iclock/registry", (req, res) => {
       httpOnly: true,
       path: "/",
       sameSite: "Strict",
-      maxAge: 1000 * 60 * 60 * 24, // Thời hạn 1 ngày
+      maxAge: 1000 * 60 * 60 * 24,
     });
 
     res.send(`RegistryCode=${registryCode}\nSessionID=${sessionID}`);
@@ -121,11 +117,15 @@ app.get("/iclock/push", (req, res) => {
     return res.status(400).send("Missing SN");
   }
 
+  const device = registeredDevices[SN];
+
+  if (!device) {
+    return res.status(400).send("Can not find device");
+  }
+
   res.send(
     [
-      // "ServerVersion=3.0.1",
-      // "ServerName=MyPushServer",
-      "SessionID=" + (registeredDevices[SN]?.sessionID || ""),
+      "SessionID=" + (device?.sessionID || ""),
       "ErrorDelay=30",
       "RequestDelay=1",
       "TransTimes=00:00",
@@ -138,16 +138,61 @@ app.get("/iclock/push", (req, res) => {
 
 // Nhận dữ liệu từ thiết bị gửi về
 app.post("/iclock/cdata", (req, res) => {
-  const parts = req.body.trim().split(/\s+/);
+  const { SN } = req.query;
 
-  console.log("parts", parts);
-
-  if (parts[0] === "OPLOG") {
-    console.log("User management");
+  if (!SN) {
+    return res.status(400).send("Missing SN");
   }
 
-  if (parts[0] === "ATTLOG") {
-    console.log("User authorization");
+  const device = registeredDevices[SN];
+
+  const parts = req.body.trim().split(/\s+/);
+
+  if (device) {
+    if (req.query.table === "ATTLOG") {
+      const [userId, datetime, _, event] = parts;
+
+      if (userId) {
+        if (event == "0") {
+          console.log(`Check in - userId: ${userId} - ${datetime}`);
+        }
+        if (event == "1") {
+          console.log(`Check out - userId: ${userId} - ${datetime}`);
+        }
+      }
+    }
+
+    if (req.query.table == "OPERLOG") {
+      const [type] = parts;
+
+      if (type == "OPLOG") {
+        const [_, event] = parts;
+
+        if (event == "70") {
+          const [_0, _1, _2, _3, _4, userId] = parts;
+          console.log(`Update user - userId: ${userId}`);
+        }
+
+        if (event == "103") {
+          const [_0, _1, _2, _3, _4, _5, userId] = parts;
+          console.log(`Delete user - userId: ${userId}`, parts);
+        }
+
+        if (event == "4") {
+          const [_0, _1, _2, _3, _4, userId] = parts;
+          console.log(`Open machine: userId: ${userId}`);
+        }
+
+        if (event == "5") {
+          console.log(`Close machine - userId: ${userId}`);
+        }
+      } else {
+        const [userId, username, level] = parts;
+        console.log(
+          `Create user - userId: ${userId} - username: ${username} level: ${level}`
+        );
+      }
+    }
   }
 
   res.send("OK");
@@ -162,38 +207,68 @@ app.get("/iclock/getrequest", (req, res) => {
   }
 
   if (INFO) {
-    // INFO: 'ZAM180-NF50VA-Ver3.4.9,5,0,146,192.168.2.43,10,39,12,5,11110,0,0,0'
     console.log("Data bị thay đổi bởi events");
   }
-
-  // const shouldQueryUser = true;
-
-  // if (shouldQueryUser) {
-  //   const cmdId = 415;
-  //   const cmdStr = `C:${cmdId}:DATA QUERY tablename=user,fielddesc=*,filter=*`;
-  //   return res.send(cmdStr);
-  // }
 
   res.send("OK");
 });
 
-// Endpoint nhận dữ liệu querydata từ thiết bị
-// app.post("/iclock/querydata", (req, res) => {
-//   const { SN, type, cmdid, tablename, count, packcnt, packidx } = req.query;
+//  nhận dữ liệu querydata từ thiết bị
+app.post("/iclock/querydata", (req, res) => {
+  const { SN, type, cmdid, tablename, count, packcnt, packidx } = req.query;
 
-//   const dataRecord = req.body;
+  const dataRecord = req.body;
 
-//   console.log("Received QueryData from device:", SN);
-//   console.log("Type:", type);
-//   console.log("CmdID:", cmdid);
-//   console.log("Table:", tablename);
-//   console.log("Count:", count);
-//   console.log("Pack Count:", packcnt);
-//   console.log("Pack Index:", packidx);
-//   console.log("DataRecord:", dataRecord);
+  console.log("Received QueryData from device:", SN);
+  console.log("Type:", type);
+  console.log("CmdID:", cmdid);
+  console.log("Table:", tablename);
+  console.log("Count:", count);
+  console.log("Pack Count:", packcnt);
+  console.log("Pack Index:", packidx);
+  console.log("DataRecord:", dataRecord);
 
-//   res.status(200).send(`${tablename}=${count}`);
-// });
+  res.status(200).send(`${tablename}=${count}`);
+});
+
+// Endpoint lấy danh sách user (gọi ra thiết bị)
+app.get("/users", async (req, res) => {
+  try {
+    const response = await axios.post(
+      `http://192.168.2.43:4370/iclock/querydata`,
+      null,
+      {
+        params: {
+          SN: "8116244700513",
+          type: "tabledata",
+          tablename: "user",
+          count: 0,
+          packcnt: 1,
+          packidx: 0,
+        },
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+      }
+    );
+    console.log("Gọi thủ công");
+    // Parse dữ liệu trả về từ thiết bị
+    const users = response.data.split("\n").map((line) => {
+      const fields = line.trim().split(" ");
+      const user = {};
+      fields.forEach((field) => {
+        const [key, value] = field.split("=");
+        user[key] = value;
+      });
+      return user;
+    });
+
+    res.json(users);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Failed to fetch users" });
+  }
+});
 
 app.listen(8080, () => {
   console.log("Server running on port 8080");
