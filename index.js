@@ -99,13 +99,9 @@ app.post("/iclock/registry", (req, res) => {
       maxAge: 1000 * 60 * 60 * 24,
     });
 
-    res.send(`RegistryCode=${registryCode}\nSessionID=${sessionID}`);
+    return res.send("");
   } else {
-    const device = registeredDevices[SN];
-
-    res.send(
-      `RegistryCode=${device.registryCode}\nSessionID=${device.sessionID}`
-    );
+    res.send("OK");
   }
 });
 
