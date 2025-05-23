@@ -1,6 +1,7 @@
 import express from "express";
 import crypto from "crypto";
 import fs from "fs";
+import axios from "axios";
 
 export const base64 = fs.readFileSync("./image.txt", "utf-8");
 
@@ -67,6 +68,8 @@ function registerDevice(serialNumber, res) {
     "TimeoutSec=60",
   ];
 
+  device.isSynced = false;
+
   registeredDevices[serialNumber] = device;
 
   res
@@ -93,6 +96,8 @@ app.get("/iclock/cdata", (req, res) => {
 
   if (device) {
     console.log("METHOD GET - /iclock/cdata: Đã đăng ký device");
+    // call api to synnc users
+    // insert users
     res.send(device);
   } else {
     console.log("METHOD GET - /iclock/cdata: Chưa đăng ký device");
@@ -124,9 +129,11 @@ app.post("/iclock/cdata", (req, res) => {
       if (userId) {
         if (event == "0") {
           console.log(`Check in - userId: ${userId} - ${datetime}`);
+          // call to send data
         }
         if (event == "1") {
           console.log(`Check out - userId: ${userId} - ${datetime}`);
+          // call to send data
         }
       }
     }
@@ -189,14 +196,15 @@ app.get("/iclock/getrequest", (req, res) => {
 
       // const cmd = `C:12345:DATA UPDATE BIOPHOTO PIN=1\tContent=\r\n`;
 
-      //   const date = new Date();
-      //   const cmd1 = `C:${date.getSeconds()}:DATA USER PIN=3\tName=Son\tPassword=3\tCard=3\tGrp=1\tPri=14\r\n`;
-      //   const cmd2 = `C:${
-      //     date.getSeconds() + 1
-      //   }:DATA UPDATE BIOPHOTO PIN=3\tContent=${base64}\r\n`;
-      //   const cmd = `${cmd1}${cmd2}`;
+      // const cmd = "C:1:DATA QUERY USER *";
 
-      //   return res.send(cmd);
+      // const date = new Date();
+
+      // const CMDID = `C:${date.getSeconds() + 1}`;
+
+      // const CMD = `C:${CMDID}:DATA UPDATE BIOPHOTO PIN=3\tContent=${base64}\r\n`;
+
+      // return res.send(CMD);
     } else {
       return res.send("OK");
     }
