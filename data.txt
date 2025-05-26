@@ -1,3 +1,4 @@
+LD_LIBRARY_PATH=/app/cropserver/lib /app/cropserver/cropserver
 Method: POST /iclock/cdata?SN=8116244700513&table=OPERLOG&OpStamp=9999
 IP: ::ffff:192.168.2.43
 Headers: {

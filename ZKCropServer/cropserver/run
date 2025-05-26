@@ -1,0 +1,15 @@
+#!/bin/bash
+#守护进程
+while true
+do
+res=`ps -ef | grep "cropserver" |grep -v grep| wc -l`
+#echo $res
+if [ $res -eq 0 ]
+then
+killall cropserver&
+sleep 1
+LD_LIBRARY_PATH=./lib ./cropserver&
+fi
+sleep 5s
+#守护进程运行间隔
+done

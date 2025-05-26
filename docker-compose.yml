@@ -1,0 +1,13 @@
+version: "3.8"
+
+services:
+  cropserver:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cropserver-container
+    ports:
+      - "16001:16001"
+      - "8080:8080"
+    volumes:
+      - ./:/app
