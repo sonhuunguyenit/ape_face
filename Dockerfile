@@ -1,26 +1,37 @@
-# Use official Ubuntu base
 FROM ubuntu:20.04
 
-# Set environment to avoid tzdata prompts
 ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y \
+    iproute2 \
+    curl \
+    psmisc \
+    && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
 WORKDIR /app
 
-# Copy all files to /app
-COPY . /app
+# Copy the whole project into the container
+COPY ZKCropServer/ ./ZKCropServer/
 
-# Install dependencies
-RUN apt update && \
-    apt install -y curl gnupg tzdata && \
-    curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \
-    apt install -y nodejs && \
-    ln -fs /usr/share/zoneinfo/Asia/Ho_Chi_Minh /etc/localtime && \
-    dpkg-reconfigure -f noninteractive tzdata && \
-    chmod +x /app/ZKCropServer/cropserver /app/ZKCropServer/start /app/ZKCropServer/stop
+# Make sure all files are executable if needed
+RUN chmod -R +x ./ZKCropServer
 
-# Expose the cropserver port
-EXPOSE 16001 8080
+# Set LD_LIBRARY_PATH to the correct directory containing libsimage.so
+ENV LD_LIBRARY_PATH=/app/ZKCropServer/cropserver/lib:$LD_LIBRARY_PATH
 
-# Start both cropserver binary and Node.js app
-CMD bash -c "node index.js"
+# Register the library path for dynamic linker
+RUN echo "/app/ZKCropServer/cropserver/lib" > /etc/ld.so.conf.d/zkcrop.conf && ldconfig
+
+# Set working directory where the binary lives
+WORKDIR /app/ZKCropServer
+
+# Expose any needed ports
+EXPOSE 16001 25002
+
+# Entry point to run the server
+ENTRYPOINT ["bash", "-c"]
+CMD ["./cropserver/cropserver"]
+
+# docker build -t zk-crop-ubuntu:20.04 .
+# docker run -it --rm -p 16001:16001 -p 25002:25002 zk-crop-ubuntu:20.04
