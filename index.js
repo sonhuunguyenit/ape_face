@@ -8,13 +8,7 @@ import {
   convertImageToBase64,
 } from "./helpers.js";
 
-export const base64 = fs.readFileSync("./image.txt", "utf-8");
-
 const app = express();
-
-const IP_ZKT_CONVERT_IMAGE = "192.168.2.103";
-
-const URL_ZKT_REPONSE_LISTENER = "http://localhost:3001";
 
 const ROOT_URL = "http://localhost:3001/api/admin/timesheet-records";
 
@@ -267,11 +261,11 @@ app.post("/convert-image", async (req, res) => {
   if (crop && crop.ret == 0) {
     const base64 = await convertImageToBase64(crop.DestFileName);
 
-    return {
+    return res.json({
       status: true,
       message: "success",
       data: base64,
-    };
+    });
   } else {
     return res.status(400).json({
       status: false,
