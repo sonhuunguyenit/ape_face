@@ -2,11 +2,19 @@ import express from "express";
 import crypto from "crypto";
 import fs from "fs";
 import axios from "axios";
-import { saveImageFromURL, cropImageService } from "./helpers.js";
+import {
+  saveImageFromURL,
+  cropImageService,
+  convertImageToBase64,
+} from "./helpers.js";
 
 export const base64 = fs.readFileSync("./image.txt", "utf-8");
 
 const app = express();
+
+const IP_ZKT_CONVERT_IMAGE = "192.168.2.103";
+
+const URL_ZKT_REPONSE_LISTENER = "http://localhost:3001";
 
 const ROOT_URL = "http://localhost:3001/api/admin/timesheet-records";
 
@@ -257,16 +265,12 @@ app.post("/convert-image", async (req, res) => {
   const crop = await cropImageService(image.urlPath, image.filename);
 
   if (crop && crop.ret == 0) {
-    const convertPath = image.urlPath.replace("download", "convert");
-
-    const fileBuffer = fs.readFileSync(convertPath);
-
-    console.log("convertPath", convertPath);
+    const base64 = await convertImageToBase64(crop.DestFileName);
 
     return {
       status: true,
       message: "success",
-      data: fileBuffer.toString("base64"),
+      data: base64,
     };
   } else {
     return res.status(400).json({

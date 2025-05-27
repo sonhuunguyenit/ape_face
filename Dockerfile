@@ -33,5 +33,5 @@ EXPOSE 16001 25002
 ENTRYPOINT ["bash", "-c"]
 CMD ["./cropserver/cropserver"]
 
-# docker build -t zk-crop-ubuntu:20.04 .
-# docker run -it --rm -p 16001:16001 -p 25002:25002 zk-crop-ubuntu:20.04
+# docker build -t zk-crop .
+# docker run -it --rm -p 16001:16001 -p 25002:25002 zk-crop
