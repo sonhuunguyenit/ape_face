@@ -1,6 +1,0 @@
-# !/bin/sh
-killall run
-sleep 1
-cd cropserver
-./run&
-

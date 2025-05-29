@@ -1,16 +1,15 @@
-import express from "express";
-import crypto from "crypto";
-import fs from "fs";
 import axios from "axios";
-import { saveImageFromURL, cropImageService } from "./helpers.js";
-
-export const base64 = fs.readFileSync("./image.txt", "utf-8");
+import crypto from "crypto";
+import express from "express";
+import {
+  TOKEN_AUTH,
+  URL_SYNC_LIST_USER,
+  URL_SEND_EVENT_TO_MES,
+} from "./constants.js";
 
 const app = express();
 
-const ROOT_URL = "http://localhost:3001/api/admin/timesheet-records";
-
-const SYNC_USER = "/sync-list-user-zkt";
+const PORT = 8080;
 
 app.use(
   express.text({
@@ -27,10 +26,10 @@ app.use(express.json());
 
 app.use((req, res, next) => {
   const { method, url, query, body, headers, ip } = req;
+
   console.log("\n=====================");
+  console.log("Device IP:", ip);
   console.log("Method:", `${method} ${url}`);
-  console.log("IP:", ip);
-  console.log("Headers:", headers);
   console.log("Query:", query);
   console.log("Body:", body);
   console.log("=====================\n");
@@ -67,6 +66,7 @@ function registerDevice(serialNumber, res) {
 
   const device = {
     registry: "ok",
+    SN: serialNumber,
     RegistryCode: registryCode,
     SessionID: sessionID,
     RequestDelay: 5,
@@ -74,7 +74,9 @@ function registerDevice(serialNumber, res) {
     TransTables: "User Transaction",
     Realtime: 1,
     TimeoutSec: 60,
-    IsSynced: false,
+    isSyncUserInfo: false,
+    isSyncUserBio: false,
+    isSyncUser: false,
   };
 
   registeredDevices[serialNumber] = device;
@@ -93,57 +95,148 @@ function registerDevice(serialNumber, res) {
     .send(deviceResponse);
 }
 
-// Kiểm tra kết nối thiết bị với server (chạy một lần)
-app.get("/iclock/cdata", (req, res) => {
+// Device yêu cầu kết nối (chạy một lần khi bật máy)
+app.get("/iclock/cdata", async (req, res) => {
   const { SN } = req.query;
-
-  if (!SN) {
-    return res.status(400).send("Missing SN");
-  }
-
   const device = registeredDevices[SN];
 
-  console.log("registeredDevices", registeredDevices);
-
   if (device) {
-    console.log("METHOD GET - /iclock/cdata: Đã đăng ký device");
-    // call api to synnc users
     res.send(device);
   } else {
-    console.log("METHOD GET - /iclock/cdata: Chưa đăng ký device");
     res.send("OK");
   }
 });
 
-app.post("/iclock/cdata", (req, res) => {
+// Device phản hồi sau khi yêu cầu kết nối
+app.post("/iclock/cdata", async (req, res) => {
+  const { SN } = req.query;
+  const device = registeredDevices[SN];
+
+  if (device) {
+    await handleEvent(req);
+    return res.send("OK");
+  } else {
+    return registerDevice(SN, res);
+  }
+});
+
+// Chạy liên tục để gửi CMD
+app.get("/iclock/getrequest", async (req, res) => {
+  const { SN, INFO } = req.query;
+  const device = registeredDevices[SN];
+
+  if (device) {
+    if (!device.isSyncUser) {
+      const cmdSync = await syncListUserWithMes(device);
+      registeredDevices[SN].isSyncUser = true;
+      return res.send(cmdSync);
+    }
+  } else {
+    return registerDevice(SN, res);
+  }
+});
+
+// Data response sau khi thực hiện CMD
+app.post("/iclock/devicecmd", express.raw({ type: "*/*" }), (req, res) => {
+  const { SN } = req.query;
+
+  const rawBody = req.body.toString("utf-8");
+  console.log("/devicecmd from:", SN);
+  console.log("Raw body:", rawBody);
+
+  const result = {};
+  rawBody.split("&").forEach((pair) => {
+    const [key, value] = pair.split("=");
+    if (key && value !== undefined) {
+      result[key] = decodeURIComponent(value);
+    }
+  });
+
+  console.log("Parsed:", result);
+  res.send("OK");
+});
+
+const syncListUserWithMes = async (device) => {
+  const response = await axios.post(
+    URL_SYNC_LIST_USER,
+    {
+      SN: device.SN,
+    },
+    {
+      headers: {
+        "x-header": TOKEN_AUTH,
+      },
+    }
+  );
+
+  if (response.data?.data) {
+    const listUser = response.data.data;
+
+    if (listUser.length > 0) {
+      const userInfo = [];
+      const userBio = [];
+
+      for (let user of listUser) {
+        const { PIN, Content, ...Info } = user;
+
+        userInfo.push({
+          PIN,
+          ...Info,
+        });
+
+        userBio.push({
+          PIN,
+          Content,
+        });
+      }
+
+      const cmdUserInfo = getCmdUserInfo(userInfo);
+      const cmdUserBio = getCmdUserBio(userBio);
+
+      return `${cmdUserInfo}\r\n${cmdUserBio}`;
+    }
+  }
+};
+
+// Xử lý các event của Device
+const handleEvent = async (req) => {
   const { SN, table } = req.query;
   const parts = req.body.trim().split(/\s+/);
+  const device = registeredDevices[SN];
 
-  console.log(parts);
-
-  if (!SN) {
-    return res.status(400).send("Missing SN");
-  }
+  const sendEvent = async (config) => {
+    const response = await axios.post(
+      URL_SEND_EVENT_TO_MES,
+      {
+        SN: device.SN,
+        ...config,
+      },
+      {
+        headers: {
+          "x-header": TOKEN_AUTH,
+        },
+      }
+    );
+  };
 
   if (table === "options") {
-    const device = registeredDevices[SN];
-
-    console.log("registeredDevices", registeredDevices);
-    if (!device) {
-      return registerDevice(SN, res);
-    }
+    console.log("Initial connection");
   } else {
     if (table === "ATTLOG") {
       const [userId, datetime, _, event] = parts;
 
       if (userId) {
         if (event == "0") {
-          console.log(`Check in - userId: ${userId} - ${datetime}`);
-          // call to send data
+          sendEvent({
+            event: "CHECK_IN",
+            userId,
+          });
         }
         if (event == "1") {
-          console.log(`Check out - userId: ${userId} - ${datetime}`);
-          // call to send data
+          sendEvent({
+            event: "CHECK_OUT",
+            userId,
+          });
         }
       }
     }
@@ -154,142 +247,81 @@ app.post("/iclock/cdata", (req, res) => {
       if (type == "OPLOG") {
         const [_, event] = parts;
 
+        if (event == "4") {
+          const [_0, _1, _2, _3, _4, userId] = parts;
+          sendEvent({
+            event: "OPEN_DEVICE",
+            userId,
+          });
+        }
+
+        if (event == "5") {
+          sendEvent({
+            event: "CLOSE_DEVICE",
+            userId,
+          });
+        }
+
         if (event == "70") {
           const [_0, _1, _2, _3, _4, userId] = parts;
-          console.log(`Update user - userId: ${userId}`);
+          sendEvent({
+            event: "UPDATE_USER",
+            userId,
+          });
         }
 
         if (event == "103") {
           const [_0, _1, _2, _3, _4, _5, userId] = parts;
-          console.log(`Delete user - userId: ${userId}`, parts);
-        }
-
-        if (event == "4") {
-          const [_0, _1, _2, _3, _4, userId] = parts;
-          console.log(`Open machine: userId: ${userId}`);
-        }
-
-        if (event == "5") {
-          console.log(`Close machine - userId: ${userId}`);
+          sendEvent({
+            event: "DELETE_USER",
+            userId,
+          });
         }
       } else {
         const [userId, username, level] = parts;
-        console.log(
-          `Create user - userId: ${userId} - username: ${username} level: ${level}`
-        );
+        sendEvent({
+          event: "INSERT_USER",
+          userId,
+        });
       }
     }
-
-    return res.send("OK");
-  }
-});
-
-// Run CMD (heartbeat)
-app.get("/iclock/getrequest", (req, res) => {
-  const { SN, INFO } = req.query;
-
-  if (!SN) {
-    return res.status(400).send("Missing SN");
-  }
-
-  const device = registeredDevices[SN];
-
-  if (device) {
-    if (!device.IsSynced) {
-      console.log("sync");
-
-      syncListUser();
-    }
-
-    // if (INFO) {
-    // console.log("Chạy CMD");
-    // const cmd = `C:223:CONTROL DEVICE 03000000`;
-    // const cmd = `C:1002:DATA USER PIN=1234\tName=John Doe\tPassword=1234\tCard=12345678\tGroup=1\tPrivilege=0`;
-    // const cmd = `C:1002:DATA DELETE USERINFO PIN=1234`
-    // const cmd = `C:12345:DATA UPDATE BIOPHOTO PIN=1\tContent=\r\n`;
-    // const cmd = "C:1:DATA QUERY USER *";
-    // const date = new Date();
-    // const CMDID = `C:${date.getSeconds() + 1}`;
-    // const CMD = `C:${CMDID}:DATA UPDATE BIOPHOTO PIN=3\tContent=${base64}\r\n`;
-    // return res.send(CMD);
-    // } else {
-    //   return res.send("OK");
-    // }
-  } else {
-    console.log("Device chưa đăng ký");
-    return registerDevice(SN, res);
-  }
-});
-
-// Response CMD (heartbeat)
-app.post(
-  "/iclock/devicecmd",
-  express.raw({ type: "*/*" }), // buffer
-  (req, res) => {
-    const { SN } = req.query;
-
-    const rawBody = req.body.toString("utf-8");
-    console.log("/devicecmd from:", SN);
-    console.log("Raw body:", rawBody);
-
-    const result = {};
-    rawBody.split("&").forEach((pair) => {
-      const [key, value] = pair.split("=");
-      if (key && value !== undefined) {
-        result[key] = decodeURIComponent(value);
-      }
-    });
-
-    console.log("Parsed:", result);
-    res.send("OK");
-  }
-);
-
-app.post("/convert-image", async (req, res) => {
-  const { imageUrl, filename } = req.body;
-
-  if (!imageUrl || !filename) {
-    return res.status(400).json({ error: "Missing imageUrl or filename" });
-  }
-
-  const image = await saveImageFromURL(imageUrl, filename);
-
-  const crop = await cropImageService(image.urlPath, image.filename);
-
-  if (crop && crop.ret == 0) {
-    const convertPath = image.urlPath.replace("download", "convert");
-
-    const fileBuffer = fs.readFileSync(convertPath);
-
-    console.log("convertPath", convertPath);
-
-    return {
-      status: true,
-      message: "success",
-      data: fileBuffer.toString("base64"),
-    };
-  } else {
-    return res.status(400).json({
-      status: false,
-      message: "Can not convert the image",
-    });
-  }
-});
-
-const syncListUser = async (device) => {
-  try {
-    const response = await axios.post(`${ROOT_URL}${SYNC_USER}`, {
-      SN: device.SN,
-    });
-
-    const result = await response.json();
-
-    return result;
-  } catch (error) {
-    console.log(error);
   }
 };
 
-app.listen(8080, () => {
-  console.log("Server running on port 8080");
+// Tạo user info cmd
+const getCmdUserInfo = (users) => {
+  const CMDID = `C:${Math.floor(Math.random() * 100000) + 1}`;
+
+  const StringCMD = users.reduce((a, c, i) => {
+    const user = Object.entries(c)
+      .map(([key, value]) => `${key}=${value}`)
+      .join("\t");
+
+    const cmd = `${CMDID}:DATA USER ${user}`;
+
+    return i !== users.length - 1 ? `${cmd}\r\n` : `${a}${cmd}`;
+  }, "");
+
+  return StringCMD;
+};
+
+// Tạo user bio cmd
+const getCmdUserBio = (users) => {
+  const CMDID = `C:${Math.floor(Math.random() * 100000) + 1}`;
+
+  const StringCMD = users.reduce((a, c, i) => {
+    const user = Object.entries(c)
+      .map(([key, value]) => `${key}=${value}`)
+      .join("\t");
+
+    const cmd = `${CMDID}:DATA UPDATE BIOPHOTO ${user}`;
+
+    return i !== users.length - 1 ? `${cmd}\r\n` : `${a}${cmd}`;
+  }, "");
+
+  return StringCMD;
+};
+
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });

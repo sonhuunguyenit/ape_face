@@ -1,8 +1,0 @@
-#!/bin/bash
-#守护进程
-while true
-do
-killall java&
-sleep 30s
-#守护进程运行间隔
-done
