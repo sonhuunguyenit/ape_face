@@ -1,18 +1,14 @@
-import express from "express";
-import crypto from "crypto";
-import fs from "fs";
 import axios from "axios";
-import {
-  saveImageFromURL,
-  cropImageService,
-  convertImageToBase64,
-} from "./helpers.js";
+import crypto from "crypto";
+import express from "express";
+import { image } from "./image.js";
 
 const app = express();
 
-const ROOT_URL = "http://localhost:3001/api/admin/timesheet-records";
+const TOKEN_AUTH = "7598876d-72ba-4aea-990f-2bd049ad5ed3";
 
-const SYNC_USER = "/sync-list-user-zkt";
+const URL_SYNC_LIST_USER_WITH_MES =
+  "http://localhost:3001/api/integration/zkt-face-id/sync-list-user-with-zkt";
 
 app.use(
   express.text({
@@ -31,8 +27,8 @@ app.use((req, res, next) => {
   const { method, url, query, body, headers, ip } = req;
   console.log("\n=====================");
   console.log("Method:", `${method} ${url}`);
-  console.log("IP:", ip);
-  console.log("Headers:", headers);
+  // console.log("IP:", ip);
+  // console.log("Headers:", headers);
   console.log("Query:", query);
   console.log("Body:", body);
   console.log("=====================\n");
@@ -76,7 +72,7 @@ function registerDevice(serialNumber, res) {
     TransTables: "User Transaction",
     Realtime: 1,
     TimeoutSec: 60,
-    IsSynced: false,
+    isSync: false,
   };
 
   registeredDevices[serialNumber] = device;
@@ -96,7 +92,7 @@ function registerDevice(serialNumber, res) {
 }
 
 // Kiểm tra kết nối thiết bị với server (chạy một lần)
-app.get("/iclock/cdata", (req, res) => {
+app.get("/iclock/cdata", async (req, res) => {
   const { SN } = req.query;
 
   if (!SN) {
@@ -105,35 +101,144 @@ app.get("/iclock/cdata", (req, res) => {
 
   const device = registeredDevices[SN];
 
-  console.log("registeredDevices", registeredDevices);
-
   if (device) {
-    console.log("METHOD GET - /iclock/cdata: Đã đăng ký device");
-    // call api to synnc users
+    console.log("get - /iclock/cdata: Đã đăng ký device");
     res.send(device);
   } else {
-    console.log("METHOD GET - /iclock/cdata: Chưa đăng ký device");
+    console.log("get - /iclock/cdata: Chưa đăng ký device");
     res.send("OK");
   }
 });
 
-app.post("/iclock/cdata", (req, res) => {
-  const { SN, table } = req.query;
-  const parts = req.body.trim().split(/\s+/);
-
-  console.log(parts);
+app.post("/iclock/cdata", async (req, res) => {
+  const { SN } = req.query;
 
   if (!SN) {
     return res.status(400).send("Missing SN");
   }
 
-  if (table === "options") {
-    const device = registeredDevices[SN];
+  const device = registeredDevices[SN];
 
-    console.log("registeredDevices", registeredDevices);
-    if (!device) {
-      return registerDevice(SN, res);
+  if (device) {
+    console.log("post - /iclock/cdata Đã đăng ký device");
+    handleEvent(req);
+  } else {
+    console.log("post - /iclock/cdata Chưa đăng ký device");
+    return registerDevice(SN, res);
+  }
+});
+
+// Run CMD (heartbeat)
+app.get("/iclock/getrequest", async (req, res) => {
+  const { SN, INFO } = req.query;
+
+  if (!SN) {
+    return res.status(400).send("Missing SN");
+  }
+
+  const device = registeredDevices[SN];
+
+  if (device) {
+    console.log("Device đã đăng ký - đang đồng bộ");
+
+    if (!device.isSync) {
+      const insertCmd = await syncListUserWithMes(device);
+      registeredDevices[SN].isSync = true;
+      return res.send(insertCmd);
     }
+  } else {
+    console.log("Device chưa đăng ký - heartbeat");
+    return registerDevice(SN, res);
+  }
+});
+
+// Response CMD (heartbeat)
+app.post(
+  "/iclock/devicecmd",
+  express.raw({ type: "*/*" }), // buffer
+  (req, res) => {
+    const { SN } = req.query;
+
+    const rawBody = req.body.toString("utf-8");
+    console.log("/devicecmd from:", SN);
+    console.log("Raw body:", rawBody);
+
+    const result = {};
+    rawBody.split("&").forEach((pair) => {
+      const [key, value] = pair.split("=");
+      if (key && value !== undefined) {
+        result[key] = decodeURIComponent(value);
+      }
+    });
+
+    console.log("Parsed:", result);
+    res.send("OK");
+  }
+);
+
+const syncListUserWithMes = async (device) => {
+  const response = await axios.post(
+    URL_SYNC_LIST_USER_WITH_MES,
+    {
+      SN: String(device.SN),
+    },
+    {
+      headers: {
+        "x-header": TOKEN_AUTH,
+      },
+    }
+  );
+
+  if (response.data?.data) {
+    const listUser = response.data.data;
+
+    if (listUser.length > 0) {
+      const dataInsert = listUser.reduce(
+        (acc, cur) => {
+          const { Bio, ...userInfo } = cur;
+
+          acc.info.push(userInfo);
+
+          acc.bio.push({
+            PIN: userInfo.PIN,
+            Content: Bio,
+          });
+
+          return acc;
+        },
+        {
+          info: [],
+          bio: [],
+        }
+      );
+
+      // return saveListUserInfo(dataInsert.info);
+
+      return saveListUserBio(dataInsert.bio);
+
+      // console.log(insertCMD);
+
+      // await saveListUserInfo(listUser);
+      // const listUserBio = [];
+      // for (const user of listUser) {
+      //   const base64 = await getBase64UserFace(user.imageUrl, user.userNo);
+      //   listUserBio.push({
+      //     PIN: user.userNo,
+      //     Content: base64,
+      //   });
+      // }
+      // await saveListUserBio(listUserBio);
+    }
+  }
+};
+
+const handleEvent = async (req) => {
+  const { SN, table } = req.query;
+
+  const parts = req.body.trim().split(/\s+/);
+
+  if (table === "options") {
+    console.log("Initial connection");
   } else {
     if (table === "ATTLOG") {
       const [userId, datetime, _, event] = parts;
@@ -181,111 +286,39 @@ app.post("/iclock/cdata", (req, res) => {
         );
       }
     }
-
-    return res.send("OK");
   }
-});
+};
 
-// Run CMD (heartbeat)
-app.get("/iclock/getrequest", (req, res) => {
-  const { SN, INFO } = req.query;
+const saveListUserInfo = (users) => {
+  const date = new Date();
 
-  if (!SN) {
-    return res.status(400).send("Missing SN");
-  }
+  const CMDID = `C:${date.getSeconds() + 1}`;
 
-  const device = registeredDevices[SN];
+  const StringCMD = users.reduce((a, c, i) => {
+    const user = Object.entries(c)
+      .map(([key, value]) => `${key}=${value}`)
+      .join("\t");
 
-  if (device) {
-    if (!device.IsSynced) {
-      console.log("sync");
+    return i === 0 ? user : `${a}\r\n${user}`;
+  }, "");
 
-      syncListUser();
-    }
+  return `${CMDID}:DATA USER ${StringCMD}`;
+};
 
-    // if (INFO) {
-    // console.log("Chạy CMD");
-    // const cmd = `C:223:CONTROL DEVICE 03000000`;
-    // const cmd = `C:1002:DATA USER PIN=1234\tName=John Doe\tPassword=1234\tCard=12345678\tGroup=1\tPrivilege=0`;
-    // const cmd = `C:1002:DATA DELETE USERINFO PIN=1234`
-    // const cmd = `C:12345:DATA UPDATE BIOPHOTO PIN=1\tContent=\r\n`;
-    // const cmd = "C:1:DATA QUERY USER *";
-    // const date = new Date();
-    // const CMDID = `C:${date.getSeconds() + 1}`;
-    // const CMD = `C:${CMDID}:DATA UPDATE BIOPHOTO PIN=3\tContent=${base64}\r\n`;
-    // return res.send(CMD);
-    // } else {
-    //   return res.send("OK");
-    // }
-  } else {
-    console.log("Device chưa đăng ký");
-    return registerDevice(SN, res);
-  }
-});
+const saveListUserBio = (users) => {
+  const date = new Date();
 
-// Response CMD (heartbeat)
-app.post(
-  "/iclock/devicecmd",
-  express.raw({ type: "*/*" }), // buffer
-  (req, res) => {
-    const { SN } = req.query;
+  const CMDID = `C:${date.getSeconds() + 1}`;
 
-    const rawBody = req.body.toString("utf-8");
-    console.log("/devicecmd from:", SN);
-    console.log("Raw body:", rawBody);
+  const StringCMD = users.reduce((a, c, i) => {
+    const user = Object.entries(c)
+      .map(([key, value]) => `${key}=${value}`)
+      .join("\t");
 
-    const result = {};
-    rawBody.split("&").forEach((pair) => {
-      const [key, value] = pair.split("=");
-      if (key && value !== undefined) {
-        result[key] = decodeURIComponent(value);
-      }
-    });
+    return i === 0 ? user : `${a}\r\n${user}`;
+  }, "");
 
-    console.log("Parsed:", result);
-    res.send("OK");
-  }
-);
-
-app.post("/convert-image", async (req, res) => {
-  const { imageUrl, filename } = req.body;
-
-  if (!imageUrl || !filename) {
-    return res.status(400).json({ error: "Missing imageUrl or filename" });
-  }
-
-  const image = await saveImageFromURL(imageUrl, filename);
-
-  const crop = await cropImageService(image.urlPath, image.filename);
-
-  if (crop && crop.ret == 0) {
-    const base64 = await convertImageToBase64(crop.DestFileName);
-
-    return res.json({
-      status: true,
-      message: "success",
-      data: base64,
-    });
-  } else {
-    return res.status(400).json({
-      status: false,
-      message: "Can not convert the image",
-    });
-  }
-});
-
-const syncListUser = async (device) => {
-  try {
-    const response = await axios.post(`${ROOT_URL}${SYNC_USER}`, {
-      SN: device.SN,
-    });
-
-    const result = await response.json();
-
-    return result;
-  } catch (error) {
-    console.log(error);
-  }
+  return `${CMDID}:DATA UPDATE BIOPHOTO PIN=5\tContent=${image}\r\n`;
 };
 
 app.listen(8080, () => {

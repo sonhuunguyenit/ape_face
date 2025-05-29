@@ -31,7 +31,7 @@ EXPOSE 16001 25002
 
 # Entry point to run the server
 ENTRYPOINT ["bash", "-c"]
-CMD ["./cropserver]"]
+CMD ["./cropserver"]
 
 # docker build -t zk-crop .
 # docker run -it --rm -p 16001:16001 -p 25002:25002 -v "$(pwd)/ZKCropServer/images:/app/ZKCropServer/images" zk-crop
