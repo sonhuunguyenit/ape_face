@@ -1,7 +1,11 @@
 import axios from "axios";
 import crypto from "crypto";
 import express from "express";
-import { TOKEN_AUTH, URL_SYNC_LIST_USER } from "./constants.js";
+import {
+  TOKEN_AUTH,
+  URL_SYNC_LIST_USER,
+  URL_SEND_EVENT_TO_MES,
+} from "./constants.js";
 
 const app = express();
 
@@ -97,10 +101,8 @@ app.get("/iclock/cdata", async (req, res) => {
   const device = registeredDevices[SN];
 
   if (device) {
-    console.log("get - /iclock/cdata: Đã đăng ký device");
     res.send(device);
   } else {
-    console.log("get - /iclock/cdata: Chưa đăng ký device");
     res.send("OK");
   }
 });
@@ -111,10 +113,9 @@ app.post("/iclock/cdata", async (req, res) => {
   const device = registeredDevices[SN];
 
   if (device) {
-    console.log("post - /iclock/cdata Đã đăng ký device");
-    handleEvent(req);
+    await handleEvent(req);
+    return res.send("OK");
   } else {
-    console.log("post - /iclock/cdata Chưa đăng ký device");
     return registerDevice(SN, res);
   }
 });
@@ -125,15 +126,12 @@ app.get("/iclock/getrequest", async (req, res) => {
   const device = registeredDevices[SN];
 
   if (device) {
-    console.log("Device đã đăng ký - đang đồng bộ", device);
-
     if (!device.isSyncUser) {
       const cmdSync = await syncListUserWithMes(device);
       registeredDevices[SN].isSyncUser = true;
       return res.send(cmdSync);
     }
   } else {
-    console.log("Device chưa đăng ký - heartbeat", SN);
     return registerDevice(SN, res);
   }
 });
@@ -206,88 +204,88 @@ const handleEvent = async (req) => {
   const parts = req.body.trim().split(/\s+/);
   const device = registeredDevices[SN];
 
-  // const sendEvent = async (config) => {
-  //   const response = await axios.post(
-  //     URL_SEND_EVENT_TO_MES,
-  //     {
-  //       SN: device.SN,
-  //       ...config,
-  //     },
-  //     {
-  //       headers: {
-  //         "x-header": TOKEN_AUTH,
-  //       },
-  //     }
-  //   );
-  // };
+  const sendEvent = async (config) => {
+    const response = await axios.post(
+      URL_SEND_EVENT_TO_MES,
+      {
+        SN: device.SN,
+        ...config,
+      },
+      {
+        headers: {
+          "x-header": TOKEN_AUTH,
+        },
+      }
+    );
+  };
 
-  // if (table === "options") {
-  //   console.log("Initial connection");
-  // } else {
-  //   if (table === "ATTLOG") {
-  //     const [userId, datetime, _, event] = parts;
+  if (table === "options") {
+    console.log("Initial connection");
+  } else {
+    if (table === "ATTLOG") {
+      const [userId, datetime, _, event] = parts;
 
-  //     if (userId) {
-  //       if (event == "0") {
-  //         sendEvent({
-  //           event: "CHECK_IN",
-  //           userId,
-  //         });
-  //       }
-  //       if (event == "1") {
-  //         sendEvent({
-  //           event: "CHECK_OUT",
-  //           userId,
-  //         });
-  //       }
-  //     }
-  //   }
+      if (userId) {
+        if (event == "0") {
+          sendEvent({
+            event: "CHECK_IN",
+            userId,
+          });
+        }
+        if (event == "1") {
+          sendEvent({
+            event: "CHECK_OUT",
+            userId,
+          });
+        }
+      }
+    }
 
-  //   if (table == "OPERLOG") {
-  //     const [type] = parts;
+    if (table == "OPERLOG") {
+      const [type] = parts;
 
-  //     if (type == "OPLOG") {
-  //       const [_, event] = parts;
+      if (type == "OPLOG") {
+        const [_, event] = parts;
 
-  //       if (event == "4") {
-  //         const [_0, _1, _2, _3, _4, userId] = parts;
-  //         sendEvent({
-  //           event: "OPEN_DEVICE",
-  //           userId,
-  //         });
-  //       }
+        if (event == "4") {
+          const [_0, _1, _2, _3, _4, userId] = parts;
+          sendEvent({
+            event: "OPEN_DEVICE",
+            userId,
+          });
+        }
 
-  //       if (event == "5") {
-  //         sendEvent({
-  //           event: "CLOSE_DEVICE",
-  //           userId,
-  //         });
-  //       }
+        if (event == "5") {
+          sendEvent({
+            event: "CLOSE_DEVICE",
+            userId,
+          });
+        }
 
-  //       if (event == "70") {
-  //         const [_0, _1, _2, _3, _4, userId] = parts;
-  //         sendEvent({
-  //           event: "UPDATE_USER",
-  //           userId,
-  //         });
-  //       }
+        if (event == "70") {
+          const [_0, _1, _2, _3, _4, userId] = parts;
+          sendEvent({
+            event: "UPDATE_USER",
+            userId,
+          });
+        }
 
-  //       if (event == "103") {
-  //         const [_0, _1, _2, _3, _4, _5, userId] = parts;
-  //         sendEvent({
-  //           event: "DELETE_USER",
-  //           userId,
-  //         });
-  //       }
-  //     } else {
-  //       const [userId, username, level] = parts;
-  //       sendEvent({
-  //         event: "INSERT_USER",
-  //         userId,
-  //       });
-  //     }
-  //   }
-  // }
+        if (event == "103") {
+          const [_0, _1, _2, _3, _4, _5, userId] = parts;
+          sendEvent({
+            event: "DELETE_USER",
+            userId,
+          });
+        }
+      } else {
+        const [userId, username, level] = parts;
+        sendEvent({
+          event: "INSERT_USER",
+          userId,
+        });
+      }
+    }
+  }
 };
 
 // Tạo user info cmd
