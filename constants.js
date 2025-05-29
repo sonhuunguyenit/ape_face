@@ -8,3 +8,6 @@ export const URL_SYNC_LIST_USER_BIO =
 
 export const URL_SEND_EVENT_TO_MES =
   "http://localhost:3001/api/integration/zkt-face-id/listen-zkt-event";
+
+export const URL_SYNC_LIST_USER =
+  "http://localhost:3001/api/integration/zkt-face-id/sync-list-user";

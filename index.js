@@ -1,13 +1,7 @@
 import axios from "axios";
 import crypto from "crypto";
 import express from "express";
-import {
-  TOKEN_AUTH,
-  URL_SYNC_LIST_USER_INFO,
-  URL_SYNC_LIST_USER_BIO,
-  URL_SEND_EVENT_TO_MES,
-} from "./constants.js";
-import { imageBase64 } from "./image-base64.js";
+import { TOKEN_AUTH, URL_SYNC_LIST_USER } from "./constants.js";
 
 const app = express();
 
@@ -78,6 +72,7 @@ function registerDevice(serialNumber, res) {
     TimeoutSec: 60,
     isSyncUserInfo: false,
     isSyncUserBio: false,
+    isSyncUser: false,
   };
 
   registeredDevices[serialNumber] = device;
@@ -132,18 +127,10 @@ app.get("/iclock/getrequest", async (req, res) => {
   if (device) {
     console.log("Device đã đăng ký - đang đồng bộ", device);
 
-    if (!device.isSyncUserInfo) {
-      const userInfoCmd = await syncListUserInfoWithMes(device);
-      registeredDevices[SN].isSyncUserInfo = true;
-      console.log("userInfoCmd", JSON.stringify(userInfoCmd));
-      return res.send(userInfoCmd);
-    }
-
-    if (!device.isSyncUserBio) {
-      const userBioCmd = await syncListUserBioWithMes(device);
-      registeredDevices[SN].isSyncUserBio = true;
-      console.log("userBioCmd", JSON.stringify(userBioCmd));
-      return res.send(userBioCmd);
+    if (!device.isSyncUser) {
+      const cmdSync = await syncListUserWithMes(device);
+      registeredDevices[SN].isSyncUser = true;
+      return res.send(cmdSync);
     }
   } else {
     console.log("Device chưa đăng ký - heartbeat", SN);
@@ -171,10 +158,9 @@ app.post("/iclock/devicecmd", express.raw({ type: "*/*" }), (req, res) => {
   res.send("OK");
 });
 
-// Get list user và tạo user info cmd
-const syncListUserInfoWithMes = async (device) => {
+const syncListUserWithMes = async (device) => {
   const response = await axios.post(
-    URL_SYNC_LIST_USER_INFO,
+    URL_SYNC_LIST_USER,
     {
       SN: device.SN,
     },
@@ -186,33 +172,30 @@ const syncListUserInfoWithMes = async (device) => {
   );
 
   if (response.data?.data) {
-    const listUserInfo = response.data.data;
+    const listUser = response.data.data;
 
-    if (listUserInfo.length > 0) {
-      return saveListUserInfo(listUserInfo);
-    }
-  }
-};
+    if (listUser.length > 0) {
+      const userInfo = [];
+      const userBio = [];
 
-// Get list user bio và tạo user bio cmd
-const syncListUserBioWithMes = async (device) => {
-  const response = await axios.post(
-    URL_SYNC_LIST_USER_BIO,
-    {
-      SN: device.SN,
-    },
-    {
-      headers: {
-        "x-header": TOKEN_AUTH,
-      },
-    }
-  );
+      for (let user of listUser) {
+        const { PIN, Content, ...Info } = user;
 
-  if (response.data?.data) {
-    const listUserBio = response.data.data;
+        userInfo.push({
+          PIN,
+          ...Info,
+        });
 
-    if (listUserBio.length > 0) {
-      return saveListUserBio(listUserBio);
+        userBio.push({
+          PIN,
+          Content,
+        });
+      }
+
+      const cmdUserInfo = getCmdUserInfo(userInfo);
+      const cmdUserBio = getCmdUserBio(userBio);
+
+      return `${cmdUserInfo}\r\n${cmdUserBio}`;
     }
   }
 };
@@ -308,38 +291,37 @@ const handleEvent = async (req) => {
 };
 
 // Tạo user info cmd
-const saveListUserInfo = (users) => {
-  const date = new Date();
-
-  const CMDID = `C:${date.getSeconds() + 1}`;
+const getCmdUserInfo = (users) => {
+  const CMDID = `C:${Math.floor(Math.random() * 100000) + 1}`;
 
   const StringCMD = users.reduce((a, c, i) => {
     const user = Object.entries(c)
       .map(([key, value]) => `${key}=${value}`)
       .join("\t");
 
-    return i === 0 ? user : `${a}\r\n${user}`;
+    const cmd = `${CMDID}:DATA USER ${user}`;
+
+    return i !== users.length - 1 ? `${cmd}\r\n` : `${a}${cmd}`;
   }, "");
 
-  return `${CMDID}:DATA USER ${StringCMD}`;
+  return StringCMD;
 };
 
 // Tạo user bio cmd
-const saveListUserBio = (users) => {
-  const date = new Date();
-
-  const CMDID = `C:${date.getSeconds() + 1}`;
+const getCmdUserBio = (users) => {
+  const CMDID = `C:${Math.floor(Math.random() * 100000) + 1}`;
 
   const StringCMD = users.reduce((a, c, i) => {
     const user = Object.entries(c)
       .map(([key, value]) => `${key}=${value}`)
       .join("\t");
 
-    return i === 0 ? user : `${a}\r\n${user}`;
+    const cmd = `${CMDID}:DATA UPDATE BIOPHOTO ${user}`;
+
+    return i !== users.length - 1 ? `${cmd}\r\n` : `${a}${cmd}`;
   }, "");
 
-  return `${CMDID}:DATA UPDATE BIOPHOTO ${StringCMD}`;
-  // return `${CMDID}:DATA UPDATE BIOPHOTO PIN=5\tContent=${imageBase64}\r\n`;
+  return StringCMD;
 };
 
 app.listen(PORT, () => {
