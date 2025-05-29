@@ -1,14 +1,17 @@
 import axios from "axios";
 import crypto from "crypto";
 import express from "express";
-import { image } from "./image.js";
+import {
+  TOKEN_AUTH,
+  URL_SYNC_LIST_USER_INFO,
+  URL_SYNC_LIST_USER_BIO,
+  URL_SEND_EVENT_TO_MES,
+} from "./constants.js";
+import { imageBase64 } from "./image-base64.js";
 
 const app = express();
 
-const TOKEN_AUTH = "7598876d-72ba-4aea-990f-2bd049ad5ed3";
-
-const URL_SYNC_LIST_USER_WITH_MES =
-  "http://localhost:3001/api/integration/zkt-face-id/sync-list-user-with-zkt";
+const PORT = 8080;
 
 app.use(
   express.text({
@@ -25,10 +28,10 @@ app.use(express.json());
 
 app.use((req, res, next) => {
   const { method, url, query, body, headers, ip } = req;
+
   console.log("\n=====================");
+  console.log("Device IP:", ip);
   console.log("Method:", `${method} ${url}`);
-  // console.log("IP:", ip);
-  // console.log("Headers:", headers);
   console.log("Query:", query);
   console.log("Body:", body);
   console.log("=====================\n");
@@ -65,6 +68,7 @@ function registerDevice(serialNumber, res) {
 
   const device = {
     registry: "ok",
+    SN: serialNumber,
     RegistryCode: registryCode,
     SessionID: sessionID,
     RequestDelay: 5,
@@ -72,7 +76,8 @@ function registerDevice(serialNumber, res) {
     TransTables: "User Transaction",
     Realtime: 1,
     TimeoutSec: 60,
-    isSync: false,
+    isSyncUserInfo: false,
+    isSyncUserBio: false,
   };
 
   registeredDevices[serialNumber] = device;
@@ -91,14 +96,9 @@ function registerDevice(serialNumber, res) {
     .send(deviceResponse);
 }
 
-// Kiểm tra kết nối thiết bị với server (chạy một lần)
+// Device yêu cầu kết nối (chạy một lần khi bật máy)
 app.get("/iclock/cdata", async (req, res) => {
   const { SN } = req.query;
-
-  if (!SN) {
-    return res.status(400).send("Missing SN");
-  }
-
   const device = registeredDevices[SN];
 
   if (device) {
@@ -110,13 +110,9 @@ app.get("/iclock/cdata", async (req, res) => {
   }
 });
 
+// Device phản hồi sau khi yêu cầu kết nối
 app.post("/iclock/cdata", async (req, res) => {
   const { SN } = req.query;
-
-  if (!SN) {
-    return res.status(400).send("Missing SN");
-  }
-
   const device = registeredDevices[SN];
 
   if (device) {
@@ -128,59 +124,59 @@ app.post("/iclock/cdata", async (req, res) => {
   }
 });
 
-// Run CMD (heartbeat)
+// Chạy liên tục để gửi CMD
 app.get("/iclock/getrequest", async (req, res) => {
   const { SN, INFO } = req.query;
-
-  if (!SN) {
-    return res.status(400).send("Missing SN");
-  }
-
   const device = registeredDevices[SN];
 
   if (device) {
-    console.log("Device đã đăng ký - đang đồng bộ");
+    console.log("Device đã đăng ký - đang đồng bộ", device);
 
-    if (!device.isSync) {
-      const insertCmd = await syncListUserWithMes(device);
-      registeredDevices[SN].isSync = true;
-      return res.send(insertCmd);
+    if (!device.isSyncUserInfo) {
+      const userInfoCmd = await syncListUserInfoWithMes(device);
+      registeredDevices[SN].isSyncUserInfo = true;
+      console.log("userInfoCmd", JSON.stringify(userInfoCmd));
+      return res.send(userInfoCmd);
+    }
+
+    if (!device.isSyncUserBio) {
+      const userBioCmd = await syncListUserBioWithMes(device);
+      registeredDevices[SN].isSyncUserBio = true;
+      console.log("userBioCmd", JSON.stringify(userBioCmd));
+      return res.send(userBioCmd);
     }
   } else {
-    console.log("Device chưa đăng ký - heartbeat");
+    console.log("Device chưa đăng ký - heartbeat", SN);
     return registerDevice(SN, res);
   }
 });
 
-// Response CMD (heartbeat)
-app.post(
-  "/iclock/devicecmd",
-  express.raw({ type: "*/*" }), // buffer
-  (req, res) => {
-    const { SN } = req.query;
+// Data response sau khi thực hiện CMD
+app.post("/iclock/devicecmd", express.raw({ type: "*/*" }), (req, res) => {
+  const { SN } = req.query;
 
-    const rawBody = req.body.toString("utf-8");
-    console.log("/devicecmd from:", SN);
-    console.log("Raw body:", rawBody);
+  const rawBody = req.body.toString("utf-8");
+  console.log("/devicecmd from:", SN);
+  console.log("Raw body:", rawBody);
 
-    const result = {};
-    rawBody.split("&").forEach((pair) => {
-      const [key, value] = pair.split("=");
-      if (key && value !== undefined) {
-        result[key] = decodeURIComponent(value);
-      }
-    });
+  const result = {};
+  rawBody.split("&").forEach((pair) => {
+    const [key, value] = pair.split("=");
+    if (key && value !== undefined) {
+      result[key] = decodeURIComponent(value);
+    }
+  });
 
-    console.log("Parsed:", result);
-    res.send("OK");
-  }
-);
+  console.log("Parsed:", result);
+  res.send("OK");
+});
 
-const syncListUserWithMes = async (device) => {
+// Get list user và tạo user info cmd
+const syncListUserInfoWithMes = async (device) => {
   const response = await axios.post(
-    URL_SYNC_LIST_USER_WITH_MES,
+    URL_SYNC_LIST_USER_INFO,
     {
-      SN: String(device.SN),
+      SN: device.SN,
     },
     {
       headers: {
@@ -190,105 +186,128 @@ const syncListUserWithMes = async (device) => {
   );
 
   if (response.data?.data) {
-    const listUser = response.data.data;
+    const listUserInfo = response.data.data;
 
-    if (listUser.length > 0) {
-      const dataInsert = listUser.reduce(
-        (acc, cur) => {
-          const { Bio, ...userInfo } = cur;
-
-          acc.info.push(userInfo);
-
-          acc.bio.push({
-            PIN: userInfo.PIN,
-            Content: Bio,
-          });
-
-          return acc;
-        },
-        {
-          info: [],
-          bio: [],
-        }
-      );
-
-      // return saveListUserInfo(dataInsert.info);
-
-      return saveListUserBio(dataInsert.bio);
-
-      // console.log(insertCMD);
-
-      // await saveListUserInfo(listUser);
-      // const listUserBio = [];
-      // for (const user of listUser) {
-      //   const base64 = await getBase64UserFace(user.imageUrl, user.userNo);
-      //   listUserBio.push({
-      //     PIN: user.userNo,
-      //     Content: base64,
-      //   });
-      // }
-      // await saveListUserBio(listUserBio);
+    if (listUserInfo.length > 0) {
+      return saveListUserInfo(listUserInfo);
     }
   }
 };
 
+// Get list user bio và tạo user bio cmd
+const syncListUserBioWithMes = async (device) => {
+  const response = await axios.post(
+    URL_SYNC_LIST_USER_BIO,
+    {
+      SN: device.SN,
+    },
+    {
+      headers: {
+        "x-header": TOKEN_AUTH,
+      },
+    }
+  );
+
+  if (response.data?.data) {
+    const listUserBio = response.data.data;
+
+    if (listUserBio.length > 0) {
+      return saveListUserBio(listUserBio);
+    }
+  }
+};
+
+// Xử lý các event của Device
 const handleEvent = async (req) => {
   const { SN, table } = req.query;
-
   const parts = req.body.trim().split(/\s+/);
+  const device = registeredDevices[SN];
 
-  if (table === "options") {
-    console.log("Initial connection");
-  } else {
-    if (table === "ATTLOG") {
-      const [userId, datetime, _, event] = parts;
+  // const sendEvent = async (config) => {
+  //   const response = await axios.post(
+  //     URL_SEND_EVENT_TO_MES,
+  //     {
+  //       SN: device.SN,
+  //       ...config,
+  //     },
+  //     {
+  //       headers: {
+  //         "x-header": TOKEN_AUTH,
+  //       },
+  //     }
+  //   );
+  // };
 
-      if (userId) {
-        if (event == "0") {
-          console.log(`Check in - userId: ${userId} - ${datetime}`);
-          // call to send data
-        }
-        if (event == "1") {
-          console.log(`Check out - userId: ${userId} - ${datetime}`);
-          // call to send data
-        }
-      }
-    }
+  // if (table === "options") {
+  //   console.log("Initial connection");
+  // } else {
+  //   if (table === "ATTLOG") {
+  //     const [userId, datetime, _, event] = parts;
 
-    if (table == "OPERLOG") {
-      const [type] = parts;
+  //     if (userId) {
+  //       if (event == "0") {
+  //         sendEvent({
+  //           event: "CHECK_IN",
+  //           userId,
+  //         });
+  //       }
+  //       if (event == "1") {
+  //         sendEvent({
+  //           event: "CHECK_OUT",
+  //           userId,
+  //         });
+  //       }
+  //     }
+  //   }
 
-      if (type == "OPLOG") {
-        const [_, event] = parts;
+  //   if (table == "OPERLOG") {
+  //     const [type] = parts;
 
-        if (event == "70") {
-          const [_0, _1, _2, _3, _4, userId] = parts;
-          console.log(`Update user - userId: ${userId}`);
-        }
+  //     if (type == "OPLOG") {
+  //       const [_, event] = parts;
 
-        if (event == "103") {
-          const [_0, _1, _2, _3, _4, _5, userId] = parts;
-          console.log(`Delete user - userId: ${userId}`, parts);
-        }
+  //       if (event == "4") {
+  //         const [_0, _1, _2, _3, _4, userId] = parts;
+  //         sendEvent({
+  //           event: "OPEN_DEVICE",
+  //           userId,
+  //         });
+  //       }
 
-        if (event == "4") {
-          const [_0, _1, _2, _3, _4, userId] = parts;
-          console.log(`Open machine: userId: ${userId}`);
-        }
+  //       if (event == "5") {
+  //         sendEvent({
+  //           event: "CLOSE_DEVICE",
+  //           userId,
+  //         });
+  //       }
 
-        if (event == "5") {
-          console.log(`Close machine - userId: ${userId}`);
-        }
-      } else {
-        const [userId, username, level] = parts;
-        console.log(
-          `Create user - userId: ${userId} - username: ${username} level: ${level}`
-        );
-      }
-    }
-  }
+  //       if (event == "70") {
+  //         const [_0, _1, _2, _3, _4, userId] = parts;
+  //         sendEvent({
+  //           event: "UPDATE_USER",
+  //           userId,
+  //         });
+  //       }
+
+  //       if (event == "103") {
+  //         const [_0, _1, _2, _3, _4, _5, userId] = parts;
+  //         sendEvent({
+  //           event: "DELETE_USER",
+  //           userId,
+  //         });
+  //       }
+  //     } else {
+  //       const [userId, username, level] = parts;
+  //       sendEvent({
+  //         event: "INSERT_USER",
+  //         userId,
+  //       });
+  //     }
+  //   }
+  // }
 };
 
+// Tạo user info cmd
 const saveListUserInfo = (users) => {
   const date = new Date();
 
@@ -305,6 +324,7 @@ const saveListUserInfo = (users) => {
   return `${CMDID}:DATA USER ${StringCMD}`;
 };
 
+// Tạo user bio cmd
 const saveListUserBio = (users) => {
   const date = new Date();
 
@@ -318,9 +338,10 @@ const saveListUserBio = (users) => {
     return i === 0 ? user : `${a}\r\n${user}`;
   }, "");
 
-  return `${CMDID}:DATA UPDATE BIOPHOTO PIN=5\tContent=${image}\r\n`;
+  return `${CMDID}:DATA UPDATE BIOPHOTO ${StringCMD}`;
+  // return `${CMDID}:DATA UPDATE BIOPHOTO PIN=5\tContent=${imageBase64}\r\n`;
 };
 
-app.listen(8080, () => {
-  console.log("Server running on port 8080");
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
